@@ -4,6 +4,12 @@ const path = require("path");
 const session = require("express-session");
 const db = require("./BackEnd/src/config/database");
 const nodemailer = require("nodemailer");
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+
+// Defina uma chave secreta forte para assinar os tokens
+const SECRET_KEY = "EstoffeMoveisPlanejados2026";
+
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -41,6 +47,32 @@ const verificarAutenticacao = (req, res, next) => {
   return res.redirect("/login");
 };
 
+function verificarAutenticacao(tiposPermitidos) {
+    return (req, res, next) => {
+        const usuario = req.session.usuario;
+
+        // Verifica se o usuário está logado na sessão
+        if (!usuario || !usuario.token) {
+            return res.redirect("/login");
+        }
+
+        try {
+            // O JWT verifica se o token guardado na sessão é legítimo e não foi alterado
+            const decodificado = jwt.verify(usuario.token, SECRET_KEY);
+
+            // Verifica se o tipo de usuário (admin, cliente, etc) tem permissão para essa rota
+            if (tiposPermitidos.includes(decodificado.tipo)) {
+                return next(); // Tudo certo! Segue para a página
+            } else {
+                return res.status(403).send("Acesso negado: Você não tem permissão para ver esta página.");
+            }
+        } catch (error) {
+            // Se o token estiver expirado ou for inválido, limpa a sessão e desloga
+            req.session.destroy();
+            return res.redirect("/login");
+        }
+    };
+}
 // ==========================================
 // 2. ROTAS GET (Visualização de Páginas)
 // ==========================================
@@ -196,7 +228,7 @@ app.get("/register", (req, res) => {
 });
 
 // Painel do Admin (Protegido)
-app.get("/admin-dashboard", verificarAutenticacao, async (req, res) => {
+app.get("/admin-dashboard", verificarAutenticacao(["admin"]), async (req, res) => {
   if (req.session.usuario.tipo !== "admin") {
     return res.redirect("/client-dashboard");
   }
@@ -253,7 +285,7 @@ app.get("/admin-dashboard", verificarAutenticacao, async (req, res) => {
 });
 
 // Painel admin-Estofador
-app.get("/admin/estofadores", verificarAutenticacao, async (req, res) => {
+app.get("/admin/estofadores", verificarAutenticacao(["admin"]), async (req, res) => {
   if (req.session.usuario.tipo !== "admin") {
     return res.redirect("/client-dashboard");
   }
@@ -275,7 +307,7 @@ app.get("/admin/estofadores", verificarAutenticacao, async (req, res) => {
 // ==========================================
 // ROTAS DO ADMINISTRADOR (GERENTE)
 // ==========================================
-app.get("/admin/dashboard", verificarAutenticacao, async (req, res) => {
+app.get("/admin/dashboard", verificarAutenticacao(["admin"]), async (req, res) => {
   if (req.session.usuario.tipo !== "admin") return res.redirect("/login");
   res.render("admin/admin-dashboard", { usuario: req.session.usuario });
 });
@@ -283,7 +315,7 @@ app.get("/admin/dashboard", verificarAutenticacao, async (req, res) => {
 // ==========================================
 // ROTAS DO ESTOFADOR (OFICINA)
 // ==========================================
-app.get("/estofador/dashboard", verificarAutenticacao, async (req, res) => {
+app.get("/estofador/dashboard", verificarAutenticacao(["estofador"]), async (req, res) => {
   if (req.session.usuario.tipo !== "estofador") return res.redirect("/login");
 
   res.render("estofador/estofador-dashboard", {
@@ -295,7 +327,7 @@ app.get("/estofador/dashboard", verificarAutenticacao, async (req, res) => {
 
 // Rota para ver detalhadamente os Novos Orçamentos (Status: Aberto)
 // 1ª ROTA: Lista Geral de Novos Orçamentos (Status: Aberto)
-app.get("/admin/orcamentos", verificarAutenticacao, async (req, res) => {
+app.get("/admin/orcamentos", verificarAutenticacao(["admin", "estofador"]), async (req, res) => {
   // 1. Sua validação de segurança (Perfeita!)
   if (
     req.session.usuario.tipo !== "admin" &&
@@ -347,7 +379,7 @@ app.get("/admin/orcamentos", verificarAutenticacao, async (req, res) => {
 // Reparou na URL? Ela bate exatamente com o link do botão "Analisar" (<%= item.codPedido %>)
 app.get(
   "/admin/pedido/:id/analisar",
-  verificarAutenticacao,
+  verificarAutenticacao(["admin"]),
   async (req, res) => {
     if (req.session.usuario.tipo !== "admin") {
       return res.redirect("/client-dashboard");
@@ -413,7 +445,7 @@ app.get(
 // Rota para Analisar produto
 app.get(
   "/admin/pedido/:id/analisar",
-  verificarAutenticacao,
+  verificarAutenticacao(["admin"]),
   async (req, res) => {
     if (req.session.usuario.tipo !== "admin") {
       return res.redirect("/client-dashboard");
@@ -454,7 +486,7 @@ app.get(
 );
 
 // Rota para ver detalhadamente os Pedidos Concluídos
-app.get("/admin/producao", verificarAutenticacao, async (req, res) => {
+app.get("/admin/producao", verificarAutenticacao(["admin"]), async (req, res) => {
   if (req.session.usuario.tipo !== "admin") {
     return res.redirect("/client-dashboard");
   }
@@ -488,7 +520,7 @@ app.get("/admin/producao", verificarAutenticacao, async (req, res) => {
 // Rota para listar os trabalhos de um estofador específico (Apenas para Admin)
 app.get(
   "/admin/estofador/:id/trabalhos",
-  verificarAutenticacao,
+  verificarAutenticacao(["admin"]),
   async (req, res) => {
     if (req.session.usuario.tipo !== "admin") return res.redirect("/login");
 
@@ -534,7 +566,7 @@ app.get(
 // Rota Estofador - Detalhes do Pedido para Análise (Apenas para o estofador responsável pelo pedido)
 app.get(
   "/estofador/pedido/:id/detalhes",
-  verificarAutenticacao,
+  verificarAutenticacao(["estofador"]),
   async (req, res) => {
     if (req.session.usuario.tipo !== "estofador") return res.redirect("/login");
 
@@ -602,7 +634,7 @@ app.get("/logout", (req, res) => {
 // ROTA: Visão do Admin para Analisar o Trabalho do Estofador
 app.get(
   "/admin/estofador-analisa/:id",
-  verificarAutenticacao,
+  verificarAutenticacao(["admin"]),
   async (req, res) => {
     // 1. Garante que apenas o Administrador/Gerente pode aceder
     if (req.session.usuario.tipo !== "admin") {
@@ -759,7 +791,7 @@ app.post("/pedido/finalizar", async (req, res) => {
 // Rota para atualizar o status do pedido
 app.post(
   "/admin/pedido/:id/status",
-  verificarAutenticacao,
+  verificarAutenticacao(["admin"]),
   async (req, res) => {
     const idPedido = req.params.id;
     const { novoStatus, codEstofador } = req.body;
@@ -833,7 +865,7 @@ app.post(
 // Rota para excluir um estofador (Apenas para Admin)
 app.post(
   "/admin/estofador/:id/excluir",
-  verificarAutenticacao,
+  verificarAutenticacao(["admin"]),
   async (req, res) => {
     if (req.session.usuario.tipo !== "admin") {
       return res.redirect("/client-dashboard");
@@ -862,7 +894,7 @@ app.post(
 );
 
 // Rota para cadastrar um Novo Estofador
-app.post("/admin/estofador/novo", verificarAutenticacao, async (req, res) => {
+app.post("/admin/estofador/novo", verificarAutenticacao(["admin"]), async (req, res) => {
   if (req.session.usuario.tipo !== "admin") {
     return res.redirect("/client-dashboard");
   }
@@ -887,7 +919,7 @@ app.post("/admin/estofador/novo", verificarAutenticacao, async (req, res) => {
 // Rota para Salvar a Edição do Estofador
 app.post(
   "/admin/estofador/:id/editar",
-  verificarAutenticacao,
+  verificarAutenticacao(["admin"]),
   async (req, res) => {
     if (req.session.usuario.tipo !== "admin") {
       return res.redirect("/client-dashboard");
@@ -912,7 +944,7 @@ app.post(
 );
 
 // Painel do Estofador (Protegido)
-app.get("/estofador-dashboard", verificarAutenticacao, async (req, res) => {
+app.get("/estofador-dashboard", verificarAutenticacao(["estofador"]), async (req, res) => {
   if (req.session.usuario.tipo !== "estofador") {
     return res.redirect("/login");
   }
@@ -967,7 +999,7 @@ app.get("/estofador-dashboard", verificarAutenticacao, async (req, res) => {
 });
 
 // Painel do Cliente (Protegido)
-app.get("/client-dashboard", verificarAutenticacao, (req, res) => {
+app.get("/client-dashboard", verificarAutenticacao(["cliente"]), (req, res) => {
   // Passamos o objeto usuario para dentro do EJS
   res.render("client/client-dashboard", {
     usuario: req.session.usuario,
@@ -975,7 +1007,7 @@ app.get("/client-dashboard", verificarAutenticacao, (req, res) => {
 });
 
 // Painel de Perfil do Cliente
-app.get("/perfil", verificarAutenticacao, async (req, res) => {
+app.get("/perfil", verificarAutenticacao(["cliente"]), async (req, res) => {
   const usuarioLogado = req.session.usuario;
 
   try {
@@ -1046,35 +1078,59 @@ app.post("/login", async (req, res) => {
   const { email, password } = req.body;
 
   try {
+    // 1. Buscamos o usuário APENAS pelo e-mail
     const [usuarios] = await db.query(
-      "SELECT codUsuario, nome, email, tipo FROM usuario WHERE email = ? AND senha = ?",
-      [email, password],
+      "SELECT codUsuario, nome, email, senha, tipo FROM usuario WHERE email = ?",
+      [email],
     );
 
     const usuarioEncontrado = usuarios[0];
 
+    // 2. Se o usuário existir, comparamos a senha digitada com a criptografada
     if (usuarioEncontrado) {
-      req.session.usuario = usuarioEncontrado;
+      const senhaCorreta = await bcrypt.compare(password, usuarioEncontrado.senha);
 
-      switch (usuarioEncontrado.tipo) {
-        case "admin":
-          return res.redirect("/admin-dashboard");
-        case "estofador":
-          return res.redirect("/estofador-dashboard");
-        case "cliente":
-          return res.redirect("/client-dashboard");
-        default:
-          return res.redirect("/");
+      if (senhaCorreta) {
+        // 3. Senha correta! Geramos o token JWT com os dados do usuário
+        const token = jwt.sign(
+          { id: usuarioEncontrado.codUsuario, tipo: usuarioEncontrado.tipo },
+          SECRET_KEY,
+          { expiresIn: '1d' } // Expira em 1 dia
+        );
+
+        // 4. Guardamos o usuário e o token na sessão para controle do servidor
+        req.session.usuario = {
+          codUsuario: usuarioEncontrado.codUsuario,
+          nome: usuarioEncontrado.nome,
+          email: usuarioEncontrado.email,
+          tipo: usuarioEncontrado.tipo,
+          token: token // Opcional: token salvo na sessão para checagens futuras
+        };
+
+        // Seu switch original para redirecionar conforme o cargo
+        switch (usuarioEncontrado.tipo) {
+          case "admin":
+            return res.redirect("/admin-dashboard");
+          case "estofador":
+            return res.redirect("/estofador-dashboard");
+          case "cliente":
+            return res.redirect("/client-dashboard");
+          default:
+            return res.redirect("/");
+        }
       }
-    } else {
-      return res.render("login", {
-        error:
-          "Email ou senha incorretos. Verifique os dados e tente novamente.",
-      });
     }
+
+    // Se o usuário não existir OU a senha estiver errada, cai aqui:
+    return res.render("login", {
+      usuario: req.session.usuario || null,
+      error: "Email ou senha incorretos. Verifique os dados e tente novamente.",
+    });
+
   } catch (error) {
     console.error("Erro no processamento do login:", error);
     return res.render("login", {
+      usuario: req.session.usuario || null,
       error: "Erro interno ao conectar com o serviço de autenticação.",
     });
   }
@@ -1082,10 +1138,8 @@ app.post("/login", async (req, res) => {
 
 // Rota de Registro de Clientes
 app.post("/register", async (req, res) => {
-  // AJUSTADO: Agora bate com o 'name' do HTML (nome e novaSenha)
   const { nome, email, novaSenha, telefone, endereco } = req.body;
 
-  // AJUSTADO: Validação usando as variáveis corretas recebidas do formulário
   if (
     !nome?.trim() ||
     !email?.trim() ||
@@ -1094,8 +1148,8 @@ app.post("/register", async (req, res) => {
     !endereco?.trim()
   ) {
     return res.render("register", {
-      error:
-        "Por favor, preencha todos os campos. Espaços em branco não são válidos.",
+      usuario: req.session.usuario || null, // Garante que a variável exista na view se necessário
+      error: "Por favor, preencha todos os campos. Espaços em branco não são válidos.",
     });
   }
 
@@ -1106,14 +1160,18 @@ app.post("/register", async (req, res) => {
     );
     if (emailExistente.length > 0) {
       return res.render("register", {
+        usuario: req.session.usuario || null,
         error: "Este e-mail já está em uso. Tente outro ou faça login.",
       });
     }
 
-    // AJUSTADO: Passando 'nome' e 'novaSenha' para o banco de dados
+    // 🌟 MUDANÇA AQUI: Criptografa a senha antes de mandar para o banco
+    const senhaCriptografada = await bcrypt.hash(novaSenha, 10);
+
+    // 🌟 MUDANÇA AQUI: Passamos 'senhaCriptografada' no lugar de 'novaSenha'
     const [resultadoUsuario] = await db.query(
       "INSERT INTO usuario (nome, email, senha) VALUES (?, ?, ?)",
-      [nome, email, novaSenha],
+      [nome, email, senhaCriptografada],
     );
 
     const novoCodUsuario = resultadoUsuario.insertId;
@@ -1130,8 +1188,8 @@ app.post("/register", async (req, res) => {
   } catch (error) {
     console.error("Erro no processamento do cadastro:", error);
     return res.render("register", {
-      error:
-        "Erro interno ao processar o seu cadastro. Tente novamente mais tarde.",
+      usuario: req.session.usuario || null,
+      error: "Erro interno ao processar o seu cadastro. Tente novamente mais tarde.",
     });
   }
 });
@@ -1139,7 +1197,7 @@ app.post("/register", async (req, res) => {
 // Rota de Atualização de Perfil
 app.post(
   "/cliente/atualizar-perfil",
-  verificarAutenticacao,
+  verificarAutenticacao(["cliente"]),
   async (req, res) => {
     const { nome, telefone, endereco, novaSenha, confirmarSenha } = req.body;
     const usuarioLogado = req.session.usuario;
