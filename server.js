@@ -40,13 +40,6 @@ app.use(
 );
 
 // Middleware de Proteção de Rotas (Garante que só logados acessem os painéis)
-const verificarAutenticacao = (req, res, next) => {
-  if (req.session && req.session.usuario) {
-    return next();
-  }
-  return res.redirect("/login");
-};
-
 function verificarAutenticacao(tiposPermitidos) {
     return (req, res, next) => {
         const usuario = req.session.usuario;
@@ -255,21 +248,21 @@ app.get("/admin-dashboard", verificarAutenticacao(["admin"]), async (req, res) =
     );
 
     // 4. Últimas Ordens de Serviço (Apenas o que NÃO está Pronto e NÃO está Entregue)
-    // Procure a query das ordensServico dentro de app.get("/admin-dashboard")
     const [ordensServico] = await db.query(`
-  SELECT
-      p.codPedido,
-      u_cli.nome AS nomeCliente,
-      p.dataPedido,
-      u_est.nome AS nomeEstofador, p.status
-  FROM pedido p
-  INNER JOIN cliente c ON p.codCliente = c.codCliente
-  INNER JOIN usuario u_cli ON c.codUsuario = u_cli.codUsuario
-  LEFT JOIN usuario u_est ON p.codEstofador = u_est.codUsuario
-  ORDER BY p.codPedido DESC
-  LIMIT 5
-`);
-    // 5. Renderiza a página enviando os dados mapeados sem erros de inicialização
+      SELECT
+          p.codPedido,
+          u_cli.nome AS nomeCliente,
+          p.dataPedido,
+          u_est.nome AS nomeEstofador, p.status
+      FROM pedido p
+      INNER JOIN cliente c ON p.codCliente = c.codCliente
+      INNER JOIN usuario u_cli ON c.codUsuario = u_cli.codUsuario
+      LEFT JOIN usuario u_est ON p.codEstofador = u_est.codUsuario
+      ORDER BY p.codPedido DESC
+      LIMIT 5
+    `);
+
+    // 5. Renderiza a página enviando os dados mapeados
     res.render("admin/admin-dashboard", {
       usuario: req.session.usuario,
       totalOrcamentos: totalOrcamentos || 0,
@@ -284,7 +277,7 @@ app.get("/admin-dashboard", verificarAutenticacao(["admin"]), async (req, res) =
   }
 });
 
-// Painel admin-Estofador
+// Painel admin-Estofadores (Lista de funcionários)
 app.get("/admin/estofadores", verificarAutenticacao(["admin"]), async (req, res) => {
   if (req.session.usuario.tipo !== "admin") {
     return res.redirect("/client-dashboard");
@@ -300,12 +293,13 @@ app.get("/admin/estofadores", verificarAutenticacao(["admin"]), async (req, res)
       estofadores,
     });
   } catch (error) {
-    console.error("Erro ao listagem estofadores:", error);
+    console.error("Erro ao listar estofadores:", error);
     res.status(500).send("Erro interno ao carregar a página de estofadores.");
   }
 });
+
 // ==========================================
-// ROTAS DO ADMINISTRADOR (GERENTE)
+// ROTAS DO ADMINISTRADOR (GERENTE) - Rota Alternativa
 // ==========================================
 app.get("/admin/dashboard", verificarAutenticacao(["admin"]), async (req, res) => {
   if (req.session.usuario.tipo !== "admin") return res.redirect("/login");
@@ -318,6 +312,11 @@ app.get("/admin/dashboard", verificarAutenticacao(["admin"]), async (req, res) =
 app.get("/estofador/dashboard", verificarAutenticacao(["estofador"]), async (req, res) => {
   if (req.session.usuario.tipo !== "estofador") return res.redirect("/login");
 
+  // AVISO: Certifique-se de fazer as queries de 'indicadores' e 'ordens' aqui antes de renderizar
+  // Coloquei arrays vazios provisórios para o servidor não quebrar se você testar agora.
+  const indicadores = []; 
+  const ordens = [];
+
   res.render("estofador/estofador-dashboard", {
     usuario: req.session.usuario,
     indicadores: indicadores,
@@ -325,21 +324,17 @@ app.get("/estofador/dashboard", verificarAutenticacao(["estofador"]), async (req
   });
 });
 
-// Rota para ver detalhadamente os Novos Orçamentos (Status: Aberto)
-// 1ª ROTA: Lista Geral de Novos Orçamentos (Status: Aberto)
+// ==========================================
+// ROTA: LISTAR ORÇAMENTOS
+// ==========================================
 app.get("/admin/orcamentos", verificarAutenticacao(["admin", "estofador"]), async (req, res) => {
-  // 1. Sua validação de segurança (Perfeita!)
-  if (
-    req.session.usuario.tipo !== "admin" &&
-    req.session.usuario.tipo !== "estofador"
-  ) {
+  if (req.session.usuario.tipo !== "admin" && req.session.usuario.tipo !== "estofador") {
     return res.redirect("/client-dashboard");
   }
 
   try {
     const tipoUsuario = req.session.usuario.tipo;
 
-    // 2. Se quem entrou for o ADMIN
     if (tipoUsuario === "admin") {
       const [orcamentos] = await db.query(`
         SELECT p.*, u.nome AS nomeCliente 
@@ -350,19 +345,17 @@ app.get("/admin/orcamentos", verificarAutenticacao(["admin", "estofador"]), asyn
         ORDER BY p.dataPedido DESC
       `);
 
-      // Renderiza a página do administrador
       return res.render("admin/orcamentos", {
         usuario: req.session.usuario,
         orcamentos: orcamentos,
       });
     }
 
-    // 3. Se quem entrou for o ESTOFADOR
     if (tipoUsuario === "estofador") {
-      // Código para buscar os indicadores do estofador...
-      // Código para buscar as ordens do estofador...
-
-      // Renderiza a página do estofador
+      // Mesma situação: declarar as variáveis para não quebrar o Node
+      const indicadores = []; 
+      const ordens = [];
+      
       return res.render("estofador/estofador-dashboard", {
         usuario: req.session.usuario,
         indicadores: indicadores,
@@ -370,122 +363,70 @@ app.get("/admin/orcamentos", verificarAutenticacao(["admin", "estofador"]), asyn
       });
     }
   } catch (error) {
-    console.error("Erro na rota centralizada:", error);
+    console.error("Erro na rota de orçamentos:", error);
     res.status(500).send("Erro interno do servidor.");
   }
 });
 
-// 2ª ROTA: Detalhes para Analisar um Pedido Específico
-// Reparou na URL? Ela bate exatamente com o link do botão "Analisar" (<%= item.codPedido %>)
-app.get(
-  "/admin/pedido/:id/analisar",
-  verificarAutenticacao(["admin"]),
-  async (req, res) => {
-    if (req.session.usuario.tipo !== "admin") {
-      return res.redirect("/client-dashboard");
-    }
+// ==========================================
+// ROTA: ANALISAR PEDIDO ESPECÍFICO (DUPLICIDADE REMOVIDA)
+// ==========================================
+app.get("/admin/pedido/:id/analisar", verificarAutenticacao(["admin"]), async (req, res) => {
+  if (req.session.usuario.tipo !== "admin") {
+    return res.redirect("/client-dashboard");
+  }
 
-    try {
-      const idPedido = req.params.id;
+  try {
+    const idPedido = req.params.id;
 
-      // A) Busca os dados gerais do Pedido e do Cliente
-      const [pedidos] = await db.query(
-        `
+    // A) Busca os dados gerais do Pedido e do Cliente (O p.* já traz a coluna observacoes)
+    const [pedidos] = await db.query(`
       SELECT p.*, u.nome AS nomeCliente, u.email AS emailCliente 
       FROM pedido p
       INNER JOIN cliente c ON p.codCliente = c.codCliente
       INNER JOIN usuario u ON c.codUsuario = u.codUsuario
       WHERE p.codPedido = ?
-    `,
-        [idPedido],
-      );
+    `, [idPedido]);
 
-      if (pedidos.length === 0) {
-        return res
-          .status(404)
-          .send("Orçamento não encontrado no banco de dados.");
-      }
+    if (pedidos.length === 0) {
+      return res.status(404).send("Orçamento não encontrado no banco de dados.");
+    }
 
-      let pedido = pedidos[0];
+    let pedido = pedidos[0];
 
-      // B) Busca os itens vinculados a este pedido (itempedido + produto)
-      const [itens] = await db.query(
-        `
-      SELECT ip.quantidade, ip.precoUnitario,ip.observacao AS observacaoProduto, prod.nome AS nomeProduto 
+    // B) Busca os itens vinculados a este pedido
+    const [itens] = await db.query(`
+      SELECT ip.quantidade, ip.precoUnitario, ip.observacao AS observacaoProduto, prod.nome AS nomeProduto 
       FROM itempedido ip
       INNER JOIN produto prod ON ip.codProduto = prod.codProduto
       WHERE ip.codPedido = ?
-    `,
-        [idPedido],
-      );
+    `, [idPedido]);
 
-      // Guarda a lista de itens dentro do objeto pedido
-      pedido.itens = itens;
+    pedido.itens = itens;
 
-      // C) Busca a lista de Estofadores ativos para preencher o <select> da página
-      const [estofadores] = await db.query(`
+    // C) Busca a lista de Estofadores ativos
+    const [estofadores] = await db.query(`
       SELECT codUsuario, nome 
       FROM usuario 
       WHERE tipo = 'estofador'
+      ORDER BY nome ASC
     `);
 
-      // Renderiza a página de análise (analisar-pedido.ejs) enviando tudo o que ela pede
-      res.render("admin/analisar-pedido", {
-        usuario: req.session.usuario,
-        pedido: pedido,
-        estofadores: estofadores,
-      });
-    } catch (error) {
-      console.error("Erro ao buscar detalhes do orçamento:", error);
-      res.status(500).send("Erro interno do servidor.");
-    }
-  },
-);
+    // D) Renderiza a página
+    res.render("admin/analisar-pedido", {
+      usuario: req.session.usuario,
+      pedido: pedido,
+      estofadores: estofadores,
+    });
+  } catch (error) {
+    console.error("Erro ao buscar detalhes do orçamento:", error);
+    res.status(500).send("Erro interno do servidor.");
+  }
+});
 
-// Rota para Analisar produto
-app.get(
-  "/admin/pedido/:id/analisar",
-  verificarAutenticacao(["admin"]),
-  async (req, res) => {
-    if (req.session.usuario.tipo !== "admin") {
-      return res.redirect("/client-dashboard");
-    }
-
-    const idPedido = req.params.id;
-
-    try {
-      const [pedidoQuery] = await db.query(
-        `
-      SELECT p.codPedido, p.dataPedido, p.status, u.nome AS nomeCliente, u.email AS emailCliente
-      FROM pedido p
-      INNER JOIN cliente c ON p.codCliente = c.codCliente
-      INNER JOIN usuario u ON c.codUsuario = u.codUsuario
-      WHERE p.codPedido = ?
-    `,
-        [idPedido],
-      );
-
-      if (pedidoQuery.length === 0) {
-        return res.status(404).send("Pedido não encontrado.");
-      }
-
-      const [estofadores] = await db.query(
-        "SELECT codUsuario, nome FROM usuario WHERE tipo = 'estofador' ORDER BY nome ASC",
-      );
-
-      res.render("admin/analisar-pedido", {
-        usuario: req.session.usuario,
-        pedido: pedidoQuery[0],
-        estofadores: estofadores,
-      });
-    } catch (error) {
-      console.error("Erro ao carregar análise do pedido:", error);
-      res.status(500).send("Erro interno ao carregar a página de análise.");
-    }
-  },
-);
-
-// Rota para ver detalhadamente os Pedidos Concluídos
+// ==========================================
+// ROTA: PEDIDOS CONCLUÍDOS (PRODUÇÃO)
+// ==========================================
 app.get("/admin/producao", verificarAutenticacao(["admin"]), async (req, res) => {
   if (req.session.usuario.tipo !== "admin") {
     return res.redirect("/client-dashboard");
@@ -1086,28 +1027,51 @@ app.post("/login", async (req, res) => {
 
     const usuarioEncontrado = usuarios[0];
 
-    // 2. Se o usuário existir, comparamos a senha digitada com a criptografada
     if (usuarioEncontrado) {
-      const senhaCorreta = await bcrypt.compare(password, usuarioEncontrado.senha);
+      let senhaCorreta = false;
 
+      // 2. Tenta comparar assumindo que a senha já está criptografada
+      try {
+        senhaCorreta = await bcrypt.compare(password, usuarioEncontrado.senha);
+      } catch (err) {
+        // Se o bcrypt falhar (porque a senha no banco é texto aberto puro, ex: '123'), mantém false
+        senhaCorreta = false;
+      }
+
+      // 3. CASO SEJA LOGIN ANTIGO: Se o bcrypt não passou, testa em texto aberto direto
+      if (!senhaCorreta && password === usuarioEncontrado.senha.trim()) {
+        senhaCorreta = true;
+
+        try {
+          // Já atualiza o banco de dados do admin/usuário antigo de forma invisível
+          const novaSenhaHash = await bcrypt.hash(password, 10);
+          await db.query("UPDATE usuario SET senha = ? WHERE codUsuario = ?", [novaSenhaHash, usuarioEncontrado.codUsuario]);
+          console.log(`🔒 Senha do usuário antigo [${usuarioEncontrado.email}] convertida para formato seguro com sucesso!`);
+        } catch (updateError) {
+          console.error("Erro ao atualizar a senha antiga no banco:", updateError);
+          // Não travamos o login do usuário se o update falhar, deixamos ele entrar
+        }
+      }
+
+      // 4. Se a senha foi validada (por hash ou texto aberto), gera o token e loga
       if (senhaCorreta) {
-        // 3. Senha correta! Geramos o token JWT com os dados do usuário
+        // Geramos o token JWT com os dados do usuário
         const token = jwt.sign(
           { id: usuarioEncontrado.codUsuario, tipo: usuarioEncontrado.tipo },
           SECRET_KEY,
-          { expiresIn: '1d' } // Expira em 1 dia
+          { expiresIn: '1d' }
         );
 
-        // 4. Guardamos o usuário e o token na sessão para controle do servidor
+        // Guardamos o usuário e o token na sessão
         req.session.usuario = {
           codUsuario: usuarioEncontrado.codUsuario,
           nome: usuarioEncontrado.nome,
           email: usuarioEncontrado.email,
           tipo: usuarioEncontrado.tipo,
-          token: token // Opcional: token salvo na sessão para checagens futuras
+          token: token
         };
 
-        // Seu switch original para redirecionar conforme o cargo
+        // Redireciona conforme o cargo
         switch (usuarioEncontrado.tipo) {
           case "admin":
             return res.redirect("/admin-dashboard");
@@ -1121,7 +1085,7 @@ app.post("/login", async (req, res) => {
       }
     }
 
-    // Se o usuário não existir OU a senha estiver errada, cai aqui:
+    // Se o usuário não existir OU a senha estiver errada após os testes, cai aqui:
     return res.render("login", {
       usuario: req.session.usuario || null,
       error: "Email ou senha incorretos. Verifique os dados e tente novamente.",
