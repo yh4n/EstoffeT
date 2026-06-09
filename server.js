@@ -6,10 +6,21 @@ const db = require("./BackEnd/src/config/database");
 const nodemailer = require("nodemailer");
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+
+// Configuração do "carreteiro" que vai enviar o e-mail (SMTP)
+// Para testes, recomendo usar um serviço gratuito como o Mailtrap, ou o Gmail se configurar "Senha de App"
+const transportador = nodemailer.createTransport({
+  host: "sandbox.smtp.mailtrap.io", 
+  port: 2525,
+  auth: {
+        user: "diaseduardoyo@gmail.com", 
+        pass: "fhme pucp nrgk vuhe"     
+    }
+});
 
 // Defina uma chave secreta forte para assinar os tokens
 const SECRET_KEY = "EstoffeMoveisPlanejados2026";
-
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -1155,6 +1166,103 @@ app.post("/register", async (req, res) => {
       usuario: req.session.usuario || null,
       error: "Erro interno ao processar o seu cadastro. Tente novamente mais tarde.",
     });
+  }
+});
+app.post("/forgot-password", async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    // 1. Verificar se o e-mail realmente pertence a um usuário cadastrado
+    const [usuarios] = await db.query("SELECT codUsuario FROM usuario WHERE email = ?", [email]);
+    
+    if (usuarios.length === 0) {
+      // Por segurança, você pode dizer que enviou o e-mail mesmo se não existir, 
+      // para evitar que hackers fiquem testando quais e-mails têm conta no seu site.
+      return res.render("forgot-password", {
+        error: null,
+        success: "Se este e-mail estiver cadastrado, as instruções foram enviadas!"
+      });
+    }
+
+    // 2. Gerar um token seguro e aleatório de 32 caracteres hexadecimais
+    const token = crypto.randomBytes(16).toString('hex');
+
+    // 3. Definir o tempo de expiração (Ex: Agora + 1 hora)
+    const dataExpiracao = new Date();
+    dataExpiracao.setHours(dataExpiracao.getHours() + 1); 
+
+    // 4. Salvar o token no banco de dados para checarmos depois
+    await db.query(
+      "INSERT INTO recuperacao_senha (email, token, expiracao) VALUES (?, ?, ?)",
+      [email, token, dataExpiracao]
+    );
+
+    // 5. Criar o link que o usuário vai clicar
+    const linkRecuperacao = `http://localhost:3000/reset-password?token=${token}`;
+
+    // 6. Montar o e-mail
+    const opcoesEmail = {
+      from: '"Estoffe Estofaria" <suporte@estoffe.com>',
+      to: email,
+      subject: "Recuperação de Senha - Estoffe",
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px; color: #1c2d1b;">
+          <h2>Olá! Você solicitou a recuperação de senha.</h2>
+          <p>Para criar uma nova senha para a sua conta Estoffe, clique no botão abaixo:</p>
+          <a href="${linkRecuperacao}" style="display: inline-block; padding: 10px 20px; background-color: #14532d; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">Alterar Minha Senha</a>
+          <p style="margin-top: 20px; font-size: 12px; color: #666;">Este link é válido por 1 hora. Se você não solicitou essa alteração, ignore este e-mail.</p>
+        </div>
+      `
+    };
+
+    // 7. Enviar o e-mail de verdade
+    await transportador.sendMail(opcoesEmail);
+
+    // Retorna sucesso para a página EJS exibir o aviso verde na tela
+    return res.render("forgot-password", {
+      error: null,
+      success: "Verifique sua caixa de entrada! Enviamos as instruções de recuperação."
+    });
+
+  } catch (error) {
+    console.error("Erro na recuperação de senha:", error);
+    return res.render("forgot-password", {
+      success: null,
+      error: "Ocorreu um erro no servidor. Tente novamente mais tarde."
+    });
+  }
+});
+
+app.post("/reset-password", async (req, res) => {
+  const { token, novaSenha } = req.body;
+
+  try {
+    // 1. Busca o e-mail atrelado àquele token
+    const [registros] = await db.query(
+      "SELECT email FROM recuperacao_senha WHERE token = ? AND expiracao > NOW() AND usado = 0",
+      [token]
+    );
+
+    if (registros.length === 0) {
+      return res.send("Token inválido ou expirado.");
+    }
+
+    const emailUsuario = registros[0].email;
+
+    // 2. Criptografa a nova senha com bcrypt
+    const novaSenhaHash = await bcrypt.hash(novaSenha, 10);
+
+    // 3. Atualiza na tabela original de usuários
+    await db.query("UPDATE usuario SET senha = ? WHERE email = ?", [novaSenhaHash, emailUsuario]);
+
+    // 4. Marca o token como usado no banco para ninguém tentar clicar nele de novo
+    await db.query("UPDATE recuperacao_senha SET usado = 1 WHERE token = ?", [token]);
+
+    // Redireciona de volta para o login avisando que mudou
+    res.redirect("/login?success=SenhaAlterada");
+  } catch (error) {
+    console.error(error);
+    res.status(500).send("Erro ao redefinir a senha.");
   }
 });
 
